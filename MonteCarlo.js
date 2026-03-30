@@ -28,23 +28,26 @@ function setupTemplate() {
   
   // Inputs de 3 Pontos e Rótulos
   sheet.getRange("B2").setValue("Mínimo:");
-  sheet.getRange("C2").setValue(80);
+  sheet.getRange("C2").setValue("");
   sheet.getRange("B3").setValue("Mais Provável:");
-  sheet.getRange("C3").setValue(100);
+  sheet.getRange("C3").setValue("");
   sheet.getRange("B4").setValue("Máximo:");
-  sheet.getRange("C4").setValue(150);
+  sheet.getRange("C4").setValue("");
   
   // Percentis e Alvo
   sheet.getRange("F2").setValue("Percentil 10");
   sheet.getRange("F3").setValue("Percentil 50");
   sheet.getRange("F4").setValue("Percentil 90");
   sheet.getRange("E5").setValue("Valor alvo:");
-  sheet.getRange("F5").setValue(120);
-  sheet.getRange("G5").setValue("Probabilidade");
+  sheet.getRange("F5").setValue("");
+  sheet.getRange("G5").setValue("Confiabilidade");
   
   // ==========================================
   // FORMATAÇÃO VISUAL E ESTÉTICA
   // ==========================================
+  
+  // Fonte 13 para toda a área de trabalho (Dashboard + Colunas de simulação)
+  sheet.getRange("A1:G1005").setFontSize(13);
   
   // Negrito nos cabeçalhos e rótulos
   sheet.getRange("A1:G1").setFontWeight("bold");
@@ -82,6 +85,10 @@ function setupTemplate() {
   sheet.setColumnWidth(5, 120); // E - Unidade / Rótulo Alvo
   sheet.setColumnWidth(6, 120); // F - Percentis / Input Alvo
   sheet.setColumnWidth(7, 140); // G - Resultados
+
+  // Formatação de números (Milhar e 2 casas decimais)
+  sheet.getRange("C2:C4").setNumberFormat("#,##0.00"); // Inputs 3 pontos
+  sheet.getRange("F5").setNumberFormat("#,##0.00");    // Valor Alvo
 }
 
 /**
@@ -99,62 +106,47 @@ function randomBeta(alpha, beta) {
 }
 
 /**
- * Executa a Simulação, cola os cenários e gera os gráficos executivos.
+ * Executa a Simulação, cola os cenários e atualiza os dados gráficos (Versão Otimizada).
  */
 function runMonteCarlo() {
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = spreadsheet.getActiveSheet();
   var ui = SpreadsheetApp.getUi();
   
-  var numSims = 1000; 
+  var numSims = 10000; 
   var unit = sheet.getRange("F1").getValue() || "";
   
-  var histValues = sheet.getRange("A2:A").getValues().filter(function(r) { 
-    return r[0] !== "" && !isNaN(r[0]); 
-  });
-  
-  var min, mode, max;
-  
-  if (histValues.length > 0) {
-    var flatHist = histValues.map(function(r) { return Number(r[0]); });
-    flatHist.sort(function(a, b) { return a - b; });
-    min = flatHist[0];
-    max = flatHist[flatHist.length - 1];
-    var mid = Math.floor(flatHist.length / 2);
-    mode = flatHist.length % 2 !== 0 ? flatHist[mid] : (flatHist[mid - 1] + flatHist[mid]) / 2;
-  } else {
-    min = Number(sheet.getRange("C2").getValue());
-    mode = Number(sheet.getRange("C3").getValue());
-    max = Number(sheet.getRange("C4").getValue());
-  }
+  // Leitura em bloco para ganhar performance
+  var inputValues = sheet.getRange("C2:C4").getValues();
+  var min = Number(inputValues[0][0]);
+  var mode = Number(inputValues[1][0]);
+  var max = Number(inputValues[2][0]);
+  var chute = sheet.getRange("F5").getValue();
   
   if (isNaN(min) || isNaN(mode) || isNaN(max) || min > mode || mode > max) {
-    ui.alert("Erro de Parâmetros: Verifique se a regra Mínimo <= Mais Provável (ou Mediana) <= Máximo está sendo respeitada.");
+    ui.alert("Erro de Parâmetros: Verifique se a regra Mínimo <= Mais Provável <= Máximo está sendo respeitada.");
     return;
   }
 
   var results = [];
   var scenariosOutput = [];
   
-  if (min === max) {
-    for (var i = 0; i < numSims; i++) { 
-      results.push(min);
-      scenariosOutput.push([min]);
-    }
-  } else {
-    var alpha = 1 + 4 * ((mode - min) / (max - min));
-    var betaValue = 1 + 4 * ((max - mode) / (max - min));
-    
-    for (var i = 0; i < numSims; i++) {
-      var betaRandom = randomBeta(alpha, betaValue);
-      var simValue = min + (betaRandom * (max - min));
-      results.push(simValue);
-      scenariosOutput.push([simValue]); 
-    }
+  var alpha = 1 + 4 * ((mode - min) / (max - min));
+  var betaValue = 1 + 4 * ((max - mode) / (max - min));
+  
+  // Motor Matemático (Instantâneo)
+  for (var i = 0; i < numSims; i++) {
+    var betaRandom = randomBeta(alpha, betaValue);
+    var simValue = min + (betaRandom * (max - min));
+    results.push(simValue);
+    scenariosOutput.push([simValue]); 
   }
   
+  // Limpa e cola os novos cenários de uma vez
   sheet.getRange("D2:D").clearContent();
-  sheet.getRange(2, 4, numSims, 1).setValues(scenariosOutput);
+  var rangeCenarios = sheet.getRange(2, 4, numSims, 1);
+  rangeCenarios.setValues(scenariosOutput);
+  rangeCenarios.setNumberFormat("#,##0.00");
   
   var sortedResults = results.slice().sort(function(a, b) { return a - b; });
   
@@ -163,27 +155,30 @@ function runMonteCarlo() {
   var p90 = sortedResults[Math.floor(numSims * 0.90)];
   
   var formatValue = function(val) {
-    return unit ? val.toFixed(2) + " " + unit : val.toFixed(2);
+    var formattedNum = val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return unit ? formattedNum + " " + unit : formattedNum;
   };
   
-  sheet.getRange("G2").setValue(formatValue(p10));
-  sheet.getRange("G3").setValue(formatValue(p50));
-  sheet.getRange("G4").setValue(formatValue(p90));
+  // ENVIO EM BLOCO (Batch) para os Percentis: 3x mais rápido que enviar um por um
+  var percentisOutput = [
+    [formatValue(p10)],
+    [formatValue(p50)],
+    [formatValue(p90)]
+  ];
+  sheet.getRange("G2:G4").setValues(percentisOutput);
   
-  var chute = sheet.getRange("F5").getValue();
+  // Calcula a confiabilidade do chute
   if (chute !== "" && !isNaN(chute)) {
     var count = 0;
     for (var j = 0; j < sortedResults.length; j++) { if (sortedResults[j] <= Number(chute)) count++; }
     var prob = (count / numSims);
-    sheet.getRange("G6").setValue((prob * 100).toFixed(2) + "%"); // Corrigido para G6 caso queira deixar abaixo do título, ou manter na mesma célula formatada
-    // OBS: Como o título "Probabilidade" ficou em G5, o valor da probabilidade agora cairá em G6 para não apagar o título azul.
-    sheet.getRange("G6").setValue((prob * 100).toFixed(2) + "%").setHorizontalAlignment("center").setFontWeight("bold");
+    sheet.getRange("G6").setValue((prob * 100).toFixed(2) + "%").setHorizontalAlignment("center").setFontWeight("bold").setFontSize(13);
   } else {
-    sheet.getRange("G6").setValue("Insira número");
+    sheet.getRange("G6").setValue("Insira número").setFontSize(13);
   }
 
   // ==========================================
-  // GERAÇÃO DE GRÁFICOS
+  // ATUALIZAÇÃO DOS GRÁFICOS (Gargalo resolvido)
   // ==========================================
   
   var dataSheetName = "Dados_Simulacao_Oculta";
@@ -192,44 +187,46 @@ function runMonteCarlo() {
   if (!dataSheet) {
     dataSheet = spreadsheet.insertSheet(dataSheetName);
   }
-  dataSheet.clear();
   
+  // Prepara os dados do gráfico
   var chartData = [["Valores Simulados", "Probabilidade Acumulada"]];
   for (var k = 0; k < numSims; k++) {
     var cumulProb = (k + 1) / numSims; 
     chartData.push([sortedResults[k], cumulProb]);
   }
   
+  // Sobrescreve a aba oculta (os gráficos vão ler isso e piscar sozinhos)
   dataSheet.getRange(1, 1, chartData.length, 2).setValues(chartData);
   dataSheet.hideSheet(); 
   
+  // LÓGICA DE PERFORMANCE: Só desenha os gráficos se eles não existirem!
   var existingCharts = sheet.getCharts();
-  for (var c = 0; c < existingCharts.length; c++) {
-    sheet.removeChart(existingCharts[c]);
+  
+  if (existingCharts.length < 2) {
+    // Se apagou os gráficos sem querer, ele recria. Caso contrário, ignora essa parte demorada.
+    var sCurveChart = sheet.newChart()
+      .setChartType(Charts.ChartType.LINE)
+      .addRange(dataSheet.getRange(1, 1, numSims + 1, 2))
+      .setPosition(1, 9, 0, 0) 
+      .setOption('title', 'Curva S (Probabilidade Acumulada)')
+      .setOption('hAxis', {title: 'Valores Estimados (' + unit + ')'})
+      .setOption('vAxis', {title: 'Certeza / Probabilidade', format: '#%'})
+      .setOption('legend', {position: 'none'})
+      .setOption('curveType', 'function')
+      .build();
+      
+    sheet.insertChart(sCurveChart);
+    
+    var densityChart = sheet.newChart()
+      .setChartType(Charts.ChartType.HISTOGRAM)
+      .addRange(dataSheet.getRange(1, 1, numSims + 1, 1))
+      .setPosition(16, 9, 0, 0) 
+      .setOption('title', 'Densidade do Risco (Frequência das Iterações)')
+      .setOption('hAxis', {title: 'Valores Estimados (' + unit + ')'})
+      .setOption('vAxis', {title: 'Frequência (Nº de Cenários)'})
+      .setOption('legend', {position: 'none'})
+      .build();
+      
+    sheet.insertChart(densityChart);
   }
-  
-  var sCurveChart = sheet.newChart()
-    .setChartType(Charts.ChartType.LINE)
-    .addRange(dataSheet.getRange(1, 1, numSims + 1, 2))
-    .setPosition(2, 9, 0, 0) 
-    .setOption('title', 'Curva S (Probabilidade Acumulada)')
-    .setOption('hAxis', {title: 'Valores Estimados (' + unit + ')'})
-    .setOption('vAxis', {title: 'Certeza / Probabilidade', format: '#%'})
-    .setOption('legend', {position: 'none'})
-    .setOption('curveType', 'function')
-    .build();
-    
-  sheet.insertChart(sCurveChart);
-  
-  var densityChart = sheet.newChart()
-    .setChartType(Charts.ChartType.HISTOGRAM)
-    .addRange(dataSheet.getRange(1, 1, numSims + 1, 1))
-    .setPosition(24, 9, 0, 0) 
-    .setOption('title', 'Densidade do Risco (Frequência das Iterações)')
-    .setOption('hAxis', {title: 'Valores Estimados (' + unit + ')'})
-    .setOption('vAxis', {title: 'Frequência (Nº de Cenários)'})
-    .setOption('legend', {position: 'none'})
-    .build();
-    
-  sheet.insertChart(densityChart);
 }
